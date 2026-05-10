@@ -41,7 +41,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="멜론차트100플레이어",
+    name="차트100플레이어",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
