@@ -402,7 +402,8 @@ _cache_lock = threading.Lock()
 
 def _ydl_opts(player_clients: list[str]) -> dict:
     return {
-        "format":      "bestaudio[ext=m4a]/bestaudio/best",
+        # 오디오 전용 포맷만 선택 (m4a > webm > 기타) — 영상 포맷은 절대 받지 않음
+        "format":      "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
         "quiet":       True,
         "no_warnings": True,
         "noplaylist":  True,
@@ -451,8 +452,11 @@ class MelonPlayer:
         self.root.resizable(False, False)
 
         plugin_path = os.environ.get("VLC_PLUGIN_PATH", "")
-        vlc_args    = f"--plugin-path={plugin_path}" if plugin_path else ""
-        self.vlc_inst = vlc.Instance(vlc_args)
+        # 오디오 전용 모드: 비디오 출력 비활성화
+        vlc_args = ["--no-video", "--quiet", "--no-xlib"]
+        if plugin_path:
+            vlc_args.append(f"--plugin-path={plugin_path}")
+        self.vlc_inst = vlc.Instance(*vlc_args)
         self.player   = self.vlc_inst.media_player_new()
         self.player.audio_set_volume(80)
 
@@ -714,6 +718,7 @@ class MelonPlayer:
             return
 
         media = self.vlc_inst.media_new(url)
+        media.add_option(":no-video")    # 영상 출력 차단 (오디오만 재생)
         media.add_option(":http-user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
         self.player.set_media(media)
