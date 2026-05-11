@@ -469,10 +469,12 @@ class MelonPlayer:
         self.current_idx: int        = -1
         self.seeking:     bool       = False
         self.end_handled: bool       = False
-        self.shuffle:     bool       = False
-        self.repeat:      str        = "off"   # "off" | "all" | "one"
-        self.history:     list[int]  = []      # 셔플 모드 이전 곡 추적용
-        self.chart_key:   str        = "melon"
+        self.shuffle:        bool       = False
+        self.repeat:         str        = "off"   # "off" | "all" | "one"
+        self.history:        list[int]  = []      # 셔플 이전 곡 히스토리
+        self.shuffle_queue:  list[int]  = []      # 미리 정해진 셔플 순서
+        self.shuffle_pos:    int        = -1      # shuffle_queue 안 현재 위치
+        self.chart_key:      str        = "melon"
         self._load_lock               = threading.Lock()
 
         self._build_ui()
@@ -687,6 +689,13 @@ class MelonPlayer:
             if len(self.history) > 100:
                 self.history.pop(0)
 
+        # 셔플 큐 위치 동기화 (사용자가 리스트 더블클릭 등으로 점프했을 때)
+        if self.shuffle and self.shuffle_queue:
+            if idx in self.shuffle_queue:
+                self.shuffle_pos = self.shuffle_queue.index(idx)
+            else:
+                self._rebuild_shuffle_queue(start_with=idx)
+
         self.current_idx = idx
         self.end_handled = False
         song = self.songs[idx]
@@ -730,15 +739,8 @@ class MelonPlayer:
         self.player.play()
         self._set_status(f"▶  #{song['rank']}  {song['artist']} - {song['title']}")
 
-        # 다음 3곡 스트림 URL 미리 가져오기 (자동 전환을 거의 0초로)
-        for offset in (1, 2, 3):
-            ni = idx + offset
-            if ni < len(self.songs):
-                threading.Thread(
-                    target=self._prefetch_url,
-                    args=(self.songs[ni], ni),
-                    daemon=True
-                ).start()
+        # 다음 3곡 스트림 URL 미리 가져오기 (셔플이면 셔플 순서대로)
+        self._prefetch_upcoming()
 
     def _prefetch_url(self, song: dict, idx: int):
         with _cache_lock:
@@ -775,12 +777,16 @@ class MelonPlayer:
             self._play_index(self.current_idx, push_history=False)
             return
 
-        if self.shuffle and len(self.songs) > 1:
-            # 현재 곡 제외하고 랜덤
-            candidates = list(range(len(self.songs)))
-            if self.current_idx in candidates:
-                candidates.remove(self.current_idx)
-            self._play_index(random.choice(candidates))
+        if self.shuffle and self.shuffle_queue:
+            self.shuffle_pos += 1
+            if self.shuffle_pos >= len(self.shuffle_queue):
+                if self.repeat == "all":
+                    random.shuffle(self.shuffle_queue)
+                    self.shuffle_pos = 0
+                else:
+                    self._set_status("재생 목록 끝")
+                    return
+            self._play_index(self.shuffle_queue[self.shuffle_pos])
             return
 
         next_idx = self.current_idx + 1
@@ -795,11 +801,56 @@ class MelonPlayer:
     def _toggle_shuffle(self):
         self.shuffle = not self.shuffle
         if self.shuffle:
+            self._rebuild_shuffle_queue(start_with=self.current_idx)
             self.btn_shuffle.config(fg=ACCENT2)
             self._set_status("🔀 셔플 ON")
+            # 새 셔플 순서 기준으로 다음 곡 미리 가져오기
+            self._prefetch_upcoming()
         else:
+            self.shuffle_queue = []
+            self.shuffle_pos = -1
             self.btn_shuffle.config(fg=TEXT)
             self._set_status("셔플 OFF")
+
+    def _rebuild_shuffle_queue(self, start_with: int = -1):
+        """모든 곡 인덱스를 무작위로 섞고, start_with를 맨 앞에 두기."""
+        queue = list(range(len(self.songs)))
+        random.shuffle(queue)
+        if 0 <= start_with < len(self.songs):
+            if start_with in queue:
+                queue.remove(start_with)
+            queue.insert(0, start_with)
+        self.shuffle_queue = queue
+        self.shuffle_pos = 0 if queue else -1
+
+    def _upcoming_indices(self, count: int = 3) -> list[int]:
+        """현재 이후 재생될 곡 인덱스들 (prefetch 용)."""
+        result = []
+        if self.shuffle and self.shuffle_queue:
+            for offset in range(1, count + 1):
+                pos = self.shuffle_pos + offset
+                if pos < len(self.shuffle_queue):
+                    result.append(self.shuffle_queue[pos])
+                elif self.repeat == "all" and self.shuffle_queue:
+                    # 끝나면 처음으로 (전체 반복 시)
+                    wrap = (pos - len(self.shuffle_queue)) % len(self.shuffle_queue)
+                    result.append(self.shuffle_queue[wrap])
+        else:
+            for offset in range(1, count + 1):
+                ni = self.current_idx + offset
+                if ni < len(self.songs):
+                    result.append(ni)
+                elif self.repeat == "all" and self.songs:
+                    result.append((ni) % len(self.songs))
+        return result
+
+    def _prefetch_upcoming(self):
+        for ni in self._upcoming_indices(3):
+            threading.Thread(
+                target=self._prefetch_url,
+                args=(self.songs[ni], ni),
+                daemon=True
+            ).start()
 
     def _cycle_repeat(self):
         # off → all → one → off
