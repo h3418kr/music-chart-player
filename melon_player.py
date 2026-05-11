@@ -400,24 +400,43 @@ _stream_cache: dict[int, str] = {}
 _cache_lock = threading.Lock()
 
 
-def get_stream_url(song: dict) -> str | None:
-    """yt-dlp로 유튜브 스트림 URL 추출 (다운로드 없음)."""
-    query = f"{song['artist']} {song['title']}"
-    opts = {
+def _ydl_opts(player_clients: list[str]) -> dict:
+    return {
         "format":      "bestaudio[ext=m4a]/bestaudio/best",
         "quiet":       True,
         "no_warnings": True,
         "noplaylist":  True,
+        "extractor_args": {"youtube": {"player_client": player_clients}},
     }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
-        if not info:
-            return None
-        entry = info["entries"][0] if "entries" in info else info
-        return entry.get("url") if entry else None
-    except Exception:
-        return None
+
+
+def get_stream_url(song: dict) -> str | None:
+    """yt-dlp로 유튜브 스트림 URL 추출 (다운로드 없음).
+
+    YouTube 봇 차단을 우회하기 위해 여러 player_client 조합을 순차 시도한다.
+    """
+    query = f"ytsearch1:{song['artist']} {song['title']}"
+    # 우선순위 순서 — android+web이 가장 안정적
+    client_chains = [
+        ["android", "web"],
+        ["android"],
+        ["android_vr", "web"],
+        ["tv", "ios"],
+        ["mweb"],
+    ]
+    for clients in client_chains:
+        try:
+            with yt_dlp.YoutubeDL(_ydl_opts(clients)) as ydl:
+                info = ydl.extract_info(query, download=False)
+            if not info:
+                continue
+            entry = info["entries"][0] if "entries" in info else info
+            url = entry.get("url") if entry else None
+            if url:
+                return url
+        except Exception:
+            continue
+    return None
 
 
 # ─── 메인 앱 ──────────────────────────────────────────────────────────────────
