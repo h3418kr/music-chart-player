@@ -452,8 +452,13 @@ class MelonPlayer:
         self.root.resizable(False, False)
 
         plugin_path = os.environ.get("VLC_PLUGIN_PATH", "")
-        # 오디오 전용 모드: 비디오 출력 비활성화
-        vlc_args = ["--no-video", "--quiet", "--no-xlib"]
+        # 오디오 전용 + 저지연 버퍼링
+        vlc_args = [
+            "--no-video", "--quiet", "--no-xlib",
+            "--network-caching=500",   # 네트워크 버퍼 (기본 1000ms)
+            "--file-caching=300",
+            "--live-caching=300",
+        ]
         if plugin_path:
             vlc_args.append(f"--plugin-path={plugin_path}")
         self.vlc_inst = vlc.Instance(*vlc_args)
@@ -725,14 +730,15 @@ class MelonPlayer:
         self.player.play()
         self._set_status(f"▶  #{song['rank']}  {song['artist']} - {song['title']}")
 
-        # 다음 곡 스트림 URL 미리 가져오기
-        next_idx = idx + 1
-        if next_idx < len(self.songs):
-            threading.Thread(
-                target=self._prefetch_url,
-                args=(self.songs[next_idx], next_idx),
-                daemon=True
-            ).start()
+        # 다음 3곡 스트림 URL 미리 가져오기 (자동 전환을 거의 0초로)
+        for offset in (1, 2, 3):
+            ni = idx + offset
+            if ni < len(self.songs):
+                threading.Thread(
+                    target=self._prefetch_url,
+                    args=(self.songs[ni], ni),
+                    daemon=True
+                ).start()
 
     def _prefetch_url(self, song: dict, idx: int):
         with _cache_lock:
